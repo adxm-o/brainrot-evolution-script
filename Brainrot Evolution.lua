@@ -1,263 +1,294 @@
---// Key System Configuration
-local HttpService = game:GetService("HttpService")
-local keyFile = "userkey.txt"
-local keyExpireFile = "keyexpire.txt"
+--[[======================================================================
+  Brainrot Evolution Universal GUI + Secure 24‑H Key System  |  v2.0
+  • 5‑char rotating keys served over HTTPS via Cloudflare Worker proxy
+  • Key auto‑cached for 24 h, re‑validates on launch
+  • Draggable GUI, Speed, Auto Click, Auto Evolve/Rebirth, Auto Chest,
+    Fly, Teleport, Stat Viewer, Anti‑AFK, Save Config, Panic, Notifications
+  • One single file—copy‑paste straight into your executor
+  • Adjust remote paths (⚠️) to match your game’s ReplicatedStorage events
+======================================================================]]--
 
-local getKeyURL = "https://adxm-o.adxm-o.workers.dev/getkey.php"
-local validateURL = "https://adxm-o.adxm-o.workers.dev/validate.php?key="
+--------------------------[  SERVICES  ]----------------------------------
+local HttpService       = game:GetService("HttpService")
+local Players           = game:GetService("Players")
+local UserInputService  = game:GetService("UserInputService")
+local RunService        = game:GetService("RunService")
+local StarterGui        = game:GetService("StarterGui")
+local localPlayer       = Players.LocalPlayer
+-------------------------------------------------------------------------
 
---// Notification function
+--------------------------[  FILE PATHS  ]--------------------------------
+local CONFIG_FILE      = "BREvoConfig.json"   -- toggles, speed, etc.
+local KEY_FILE         = "BREvoUserKey.txt"
+local KEY_EXPIRE_FILE  = "BREvoKeyExpire.txt"
+-------------------------------------------------------------------------
+
+-------------------------[  KEY ENDPOINTS  ]------------------------------
+local BASE_URL   = "https://adxm-o.adxm-o.workers.dev"
+local GET_KEY    = BASE_URL .. "/getkey.php"
+local VALIDATE   = BASE_URL .. "/validate.php?key="
+-------------------------------------------------------------------------
+
+-------------------------[  UTIL / NOTIFY  ]------------------------------
 local function notify(title, text)
     pcall(function()
-        game.StarterGui:SetCore("SendNotification", {
+        StarterGui:SetCore("SendNotification", {
             Title = title,
-            Text = text,
+            Text  = text,
             Duration = 5
         })
     end)
 end
+-------------------------------------------------------------------------
 
---// Load existing key if not expired
+--------------------------[  CONFIG LOAD  ]-------------------------------
+local hasFS, writefile, readfile, isfile, delfile = pcall(function()
+    return writefile, readfile, isfile, delfile
+end)
+
+local config = {
+    Speed        = 16,
+    AutoClick    = false,
+    AutoEvolve   = false,
+    AutoRebirth  = false,
+    AutoChest    = false,
+    Fly          = false,
+    TeleportTo   = nil
+}
+if hasFS and isfile(CONFIG_FILE) then
+    local ok, data = pcall(readfile, CONFIG_FILE)
+    if ok then
+        local suc, tbl = pcall(HttpService.JSONDecode, HttpService, data)
+        if suc and type(tbl)=="table" then
+            for k,v in pairs(tbl) do config[k]=v end
+        end
+    end
+end
+local function saveConfig()
+    if hasFS then writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end
+end
+-------------------------------------------------------------------------
+
+--------------------------[  KEY SYSTEM  ]--------------------------------
 local function loadSavedKey()
-    if isfile(keyFile) and isfile(keyExpireFile) then
-        local savedKey = readfile(keyFile)
-        local expireTime = tonumber(readfile(keyExpireFile))
-        if os.time() < expireTime then
-            return savedKey
+    if hasFS and isfile(KEY_FILE) and isfile(KEY_EXPIRE_FILE) then
+        local key = readfile(KEY_FILE)
+        local exp = tonumber(readfile(KEY_EXPIRE_FILE))
+        if os.time() < (exp or 0) then
+            return key
         else
-            delfile(keyFile)
-            delfile(keyExpireFile)
+            delfile(KEY_FILE)
+            delfile(KEY_EXPIRE_FILE)
         end
     end
     return nil
 end
 
---// Validate key remotely
 local function validateKey(key)
-    local success, result = pcall(function()
-        return HttpService:GetAsync(validateURL .. key)
+    local ok, res = pcall(function()
+        return HttpService:GetAsync(VALIDATE .. key, true)
     end)
-
-    if success then
-        local response = HttpService:JSONDecode(result)
-        return response.valid == true
+    if ok and res == "valid_24h" then
+        return true
+    elseif ok and res == "expired" then
+        notify("Key Expired", "Grab a fresh key from the link.")
+    elseif ok then
+        notify("Key Invalid", "Wrong key. Get a valid one.")
     else
-        notify("Key Error", "Failed to reach validation server.")
-        return false
+        notify("Key Error", "Validation server unreachable.")
     end
+    return false
 end
 
---// Request new key from server
 local function requestNewKey()
-    local success, result = pcall(function()
-        return HttpService:GetAsync(getKeyURL)
+    local ok, res = pcall(function()
+        return HttpService:GetAsync(GET_KEY, true)
     end)
-
-    if not success then
-        notify("Key Error", "Failed to get key from server.")
-        error("Key server unreachable.")
+    if not ok then
+        error("Key server unreachable. Aborting.")
     end
-
-    local data = HttpService:JSONDecode(result)
-    local key = data.key
-    local message = data.message or "Key acquired."
-
-    -- Save key + 24hr expiration
-    writefile(keyFile, key)
-    writefile(keyExpireFile, tostring(os.time() + 86400))
-
-    notify("Key System", message)
+    local data = HttpService:JSONDecode(res)
+    local key  = data.key
+    local msg  = data.message or "Key received."
+    if hasFS then
+        writefile(KEY_FILE, key)
+        writefile(KEY_EXPIRE_FILE, tostring(os.time() + 86400))
+    end
+    notify("Key System", msg)
     return key
 end
+-------------------------------------------------------------------------
 
---// Main Key Flow
-local activeKey = loadSavedKey()
-if activeKey and validateKey(activeKey) then
-    notify("Key System", "Existing key is valid.")
-else
-    activeKey = requestNewKey()
-    if validateKey(activeKey) then
-        notify("Key System", "New key activated.")
-    else
-        notify("Key Error", "Key invalid or blocked.")
-        error("Unauthorized user.")
-    end
-end
+-------------------------[  GUI + FEATURES  ]-----------------------------
+local ScreenGui
 
-print("[✔] Key system passed — loading Brainrot Evolution script...")
+local function initGUI()
+    --------------- GUI ROOT ---------------
+    ScreenGui = Instance.new("ScreenGui", localPlayer:WaitForChild("PlayerGui"))
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Name = "BREvolutionGUI"
 
--- MAIN GUI FUNCTION
-function initGUI()
-    -- ROOT
     local Main = Instance.new("Frame", ScreenGui)
-    Main.Name = "Main"
-    Main.Size = UDim2.new(0,350,0,450)
-    Main.Position = UDim2.new(0.5,-175,0.5,-225)
+    Main.Size = UDim2.new(0,350,0,460)
+    Main.Position = UDim2.new(0.5,-175,0.5,-230)
     Main.BackgroundColor3 = Color3.fromRGB(25,25,25)
-    Main.Active=true; Main.Draggable=true
+    Main.Active = true
+    Main.Draggable = true
 
-    -- UI LIST
-    local function makeToggle(name, y, callback, init)
-        local lbl = Instance.new("TextLabel", Main)
-        lbl.Text = name
-        lbl.TextColor3 = Color3.new(1,1,1)
-        lbl.Position = UDim2.new(0,10,0, y)
-        lbl.Size = UDim2.new(0,150,0,25)
-        local btn = Instance.new("TextButton", Main)
-        btn.Size = UDim2.new(0,40,0,25)
-        btn.Position=UDim2.new(0,170,0,y)
-        btn.Text = init and "ON" or "OFF"
-        btn.BackgroundColor3 = init and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
-        local state = init
-        btn.MouseButton1Click:Connect(function()
-            state = not state
-            btn.Text = state and "ON" or "OFF"
-            btn.BackgroundColor3 = state and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
-            callback(state)
-            config[name:gsub("%s","")] = state
-            saveConfig()
+    -- helpers
+    local function makeLabel(txt,y)
+        local l = Instance.new("TextLabel", Main)
+        l.Text = txt
+        l.Position = UDim2.new(0,10,0,y)
+        l.Size = UDim2.new(0,150,0,25)
+        l.BackgroundTransparency = 1
+        l.Font = Enum.Font.SourceSansBold
+        l.TextSize = 16
+        l.TextColor3 = Color3.new(1,1,1)
+        return l
+    end
+    local function makeButton(txt,x,y,w,cb)
+        local b = Instance.new("TextButton", Main)
+        b.Text = txt
+        b.Position = UDim2.new(0,x,0,y)
+        b.Size = UDim2.new(0,w,0,25)
+        b.BackgroundColor3 = Color3.fromRGB(50,50,50)
+        b.Font = Enum.Font.SourceSans
+        b.TextColor3 = Color3.new(1,1,1)
+        b.TextSize = 16
+        b.MouseButton1Click:Connect(cb)
+        return b
+    end
+    local function makeToggle(name,y,init,cb)
+        makeLabel(name,y)
+        local b = makeButton(init and "ON" or "OFF",170,y,50,function()
+            init = not init
+            b.Text = init and "ON" or "OFF"
+            b.BackgroundColor3 = init and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
+            cb(init)
+            config[name] = init; saveConfig()
         end)
-        return btn
+        b.BackgroundColor3 = init and Color3.fromRGB(0,170,0) or Color3.fromRGB(170,0,0)
     end
 
-    -- Speed Slider
-    local speedLabel = Instance.new("TextLabel", Main)
-    speedLabel.Text = "WalkSpeed"
-    speedLabel.TextColor3 = Color3.new(1,1,1)
-    speedLabel.Position = UDim2.new(0,10,0,10)
-    speedLabel.Size = UDim2.new(0,100,0,25)
+    -- Speed control
+    makeLabel("WalkSpeed",10)
     local speedBox = Instance.new("TextBox", Main)
     speedBox.Position = UDim2.new(0,120,0,10)
     speedBox.Size = UDim2.new(0,50,0,25)
     speedBox.Text = tostring(config.Speed)
+    speedBox.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    speedBox.TextColor3 = Color3.new(1,1,1)
+    speedBox.Font = Enum.Font.SourceSans
+    speedBox.TextSize = 16
     speedBox.FocusLost:Connect(function()
         local v = tonumber(speedBox.Text)
         if v then
-            config.Speed=v; saveConfig()
-            if localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid") then
-                localPlayer.Character.Humanoid.WalkSpeed = v
+            config.Speed = v; saveConfig()
+            local char = localPlayer.Character
+            if char and char:FindFirstChild("Humanoid") then
+                char.Humanoid.WalkSpeed = v
             end
-        else speedBox.Text=tostring(config.Speed) end
+        else
+            speedBox.Text = tostring(config.Speed)
+        end
     end)
-    -- initial speed
+    -- Apply stored speed immediately
     if localPlayer.Character and localPlayer.Character:FindFirstChild("Humanoid") then
         localPlayer.Character.Humanoid.WalkSpeed = config.Speed
     end
 
     -- Toggles
-    makeToggle("AutoClick",    50, function(on) 
-        _G.AutoClick = on 
-    end, config.AutoClick)
-    makeToggle("AutoEvolve",   90, function(on) 
-        _G.AutoEvolve = on 
-    end, config.AutoEvolve)
-    makeToggle("AutoRebirth", 130, function(on) 
-        _G.AutoRebirth = on 
-    end, config.AutoRebirth)
-    makeToggle("AutoChest",   170, function(on) 
-        _G.AutoChest = on 
-    end, config.AutoChest)
-    makeToggle("Fly",         210, function(on)
-        _G.Fly = on
-    end, config.Fly)
+    makeToggle("AutoClick",  50,  config.AutoClick,  function(v) _G.AutoClick=v end)
+    makeToggle("AutoEvolve", 90,  config.AutoEvolve, function(v) _G.AutoEvolve=v end)
+    makeToggle("AutoRebirth",130, config.AutoRebirth,function(v) _G.AutoRebirth=v end)
+    makeToggle("AutoChest",  170, config.AutoChest,  function(v) _G.AutoChest=v end)
+    makeToggle("Fly",        210, config.Fly,        function(v) _G.Fly=v end)
 
-    -- Teleport Dropdown
-    local tpLabel = Instance.new("TextLabel", Main)
-    tpLabel.Text = "Teleport to"
-    tpLabel.TextColor3 = Color3.new(1,1,1)
-    tpLabel.Position = UDim2.new(0,10,0,250)
-    tpLabel.Size = UDim2.new(0,100,0,25)
+    -- Teleport
+    makeLabel("Teleport to",250)
     local tpBox = Instance.new("TextBox", Main)
-    tpBox.PlaceholderText = "PlaceName"
     tpBox.Position = UDim2.new(0,120,0,250)
     tpBox.Size = UDim2.new(0,100,0,25)
-    local tpBtn = Instance.new("TextButton", Main)
-    tpBtn.Text="Go"
-    tpBtn.Position = UDim2.new(0,230,0,250)
-    tpBtn.Size=UDim2.new(0,40,0,25)
-    tpBtn.MouseButton1Click:Connect(function()
-        local plr = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-        local cf = workspace:FindFirstChild(tpBox.Text) and workspace[tpBox.Text]:FindFirstChild("PrimaryPart") or workspace:FindFirstChild(tpBox.Text)
-        if plr and cf then
-            plr.CFrame = cf.CFrame
-            notify("Teleported","To "..tpBox.Text)
-            config.TeleportTo = tpBox.Text; saveConfig()
-        else notify("Error","Place not found.") end
+    tpBox.PlaceholderText = "PlaceName"
+    tpBox.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    tpBox.TextColor3 = Color3.new(1,1,1)
+    tpBox.Font = Enum.Font.SourceSans
+    tpBox.TextSize = 16
+    makeButton("Go",230,250,40,function()
+        local dest = tpBox.Text
+        local target = workspace:FindFirstChild(dest)
+        local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if target and hrp then
+            hrp.CFrame = target:IsA("Model") and target:GetModelCFrame() or target.CFrame
+            config.TeleportTo = dest; saveConfig()
+            notify("Teleported","→ "..dest)
+        else
+            notify("Error","Destination not found.")
+        end
     end)
 
-    -- Stat Viewer
-    local statBtn = Instance.new("TextButton", Main)
-    statBtn.Text = "Show Stats"
-    statBtn.Position = UDim2.new(0,10,0,290)
-    statBtn.Size = UDim2.new(0,100,0,25)
-    statBtn.MouseButton1Click:Connect(function()
+    -- Stat viewer
+    makeButton("Show Stats",10,290,100,function()
         local stats = localPlayer:FindFirstChild("leaderstats")
         if not stats then return notify("No Stats","leaderstats missing.") end
-        local msg = ""
-        for _,s in pairs(stats:GetChildren()) do
-            msg = msg..s.Name..": "..s.Value.."\n"
-        end
-        notify("Your Stats",msg)
+        local msg=""
+        for _,s in pairs(stats:GetChildren()) do msg = msg .. s.Name .. ": " .. s.Value .. "\n" end
+        notify("Your Stats", msg)
     end)
 
-    -- Panic Button
-    local panic = Instance.new("TextButton", Main)
-    panic.Text = "PANIC"
-    panic.Position = UDim2.new(0,10,0,330)
-    panic.Size = UDim2.new(0,330,0,40)
-    panic.BackgroundColor3 = Color3.new(1,0,0)
-    panic.MouseButton1Click:Connect(function()
+    -- Panic
+    local panic = makeButton("PANIC",10,330,330,function()
         ScreenGui:Destroy()
         notify("Panic","GUI removed.")
     end)
+    panic.BackgroundColor3 = Color3.new(1,0,0)
 
-    -- BACKGROUND LOOPS
+    -------------- BACKGROUND LOOPS --------------
     spawn(function()
         while RunService.RenderStepped:Wait() do
-            -- Auto Click
+            -- Auto Click (edit ClickDetector path if needed)
             if _G.AutoClick then
                 pcall(function()
                     fireclickdetector(workspace.ClickPart.ClickDetector)
                 end)
             end
-            -- Auto Evolve
+            -- Auto Evolve (⚠️ adjust remote path)
             if _G.AutoEvolve then
                 pcall(function()
-                    -- example: game.ReplicatedStorage.Events.Evolve:FireServer()
-                    game:GetService("ReplicatedStorage").Remotes.Evolve:InvokeServer()
+                    game.ReplicatedStorage.Remotes.Evolve:InvokeServer()
                 end)
             end
-            -- Auto Rebirth
+            -- Auto Rebirth (⚠️ adjust remote path)
             if _G.AutoRebirth then
                 pcall(function()
-                    game:GetService("ReplicatedStorage").Remotes.Rebirth:InvokeServer()
+                    game.ReplicatedStorage.Remotes.Rebirth:InvokeServer()
                 end)
             end
             -- Auto Chest
             if _G.AutoChest then
-                for _,v in pairs(workspace.Chests:GetChildren()) do
-                    if v:FindFirstChild("TouchPart") then
+                for _,v in pairs(workspace:GetChildren()) do
+                    if v:IsA("Model") and v.Name:lower():find("chest") and v:FindFirstChild("TouchPart") then
                         local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-                        if hrp then
-                            hrp.CFrame = v.TouchPart.CFrame
-                        end
+                        if hrp then hrp.CFrame = v.TouchPart.CFrame end
                     end
                 end
             end
             -- Fly
             if _G.Fly and localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart") then
                 local root = localPlayer.Character.HumanoidRootPart
-                root.Velocity = Vector3.new(0,0,0)
-                root.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                root.Velocity = Vector3.zero
                 local cam = workspace.CurrentCamera
-                local dir = Vector3.new()
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cam.CFrame.RightVector end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cam.CFrame.RightVector end
-                root.CFrame = root.CFrame + dir.Unit * (config.Speed or 50) * RunService.RenderStepped:Wait()
+                local dir = Vector3.zero
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
+                if dir.Magnitude > 0 then
+                    root.CFrame += dir.Unit * (config.Speed or 50) * RunService.RenderStepped:Wait()
+                end
             end
-            -- Anti AFK
+            -- Anti‑AFK
             pcall(function()
                 localPlayer.Idled:Connect(function()
                     game:GetService("VirtualUser"):ClickButton2(Vector2.new())
@@ -265,7 +296,20 @@ function initGUI()
             end)
         end
     end)
-
-    -- Final notification
-    notify("Loaded","Brainrot GUI is ready.")
+    notify("Loaded","Brainrot GUI ready.")
 end
+-------------------------------------------------------------------------
+
+-------------------------[  KEY CHECK THEN LAUNCH  ]----------------------
+local key = loadSavedKey()
+if not (key and validateKey(key)) then
+    key = requestNewKey()
+    if not validateKey(key) then
+        error("Key validation failed. Aborting script.")
+    end
+end
+notify("Key System", "Access granted. ("..os.date("!%H:%M:%S", tonumber(readfile(KEY_EXPIRE_FILE))).." UTC expiry)")
+initGUI()
+--------------------------------------------------------------------------
+
+-- End of one‑file script
