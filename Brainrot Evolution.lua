@@ -50,64 +50,73 @@ local function saveConfig()
     writefile(CONFIG_FILE, HttpService:JSONEncode(config))
 end
 
--- NOTIFICATIONS
+local HttpService = game:GetService("HttpService")
+local keyFile = "userkey.txt"
+local keyExpireFile = "keyexpire.txt"
+
+local getKeyURL = "https://adxm-o.adxm-o.workers.dev/getkey.php"
+local validateURL = "https://adxm-o.adxm-o.workers.dev/validate.php?key="
+
+-- Notification function (basic)
 local function notify(title, text)
-    StarterGui:SetCore("SendNotification", {
-        Title = title;
-        Text = text;
-        Duration = 5;
+    game.StarterGui:SetCore("SendNotification", {
+        Title = title,
+        Text = text,
+        Duration = 5
     })
 end
 
--- KEY SYSTEM UI
-local ScreenGui = Instance.new("ScreenGui", localPlayer:WaitForChild("PlayerGui"))
-ScreenGui.Name = "BREvolutionGUI"
-ScreenGui.ResetOnSpawn = false
-
-local KeyFrame = Instance.new("Frame", ScreenGui)
-KeyFrame.Size = UDim2.new(0,300,0,150)
-KeyFrame.Position = UDim2.new(0.5,-150,0.5,-75)
-KeyFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-KeyFrame.Active = true
-KeyFrame.Draggable = true
-
-local Title = Instance.new("TextLabel", KeyFrame)
-Title.Size = UDim2.new(1,0,0,30)
-Title.BackgroundTransparency = 1
-Title.Text = "Enter Access Key"
-Title.TextColor3 = Color3.new(1,1,1)
-
-local KeyBox = Instance.new("TextBox", KeyFrame)
-KeyBox.PlaceholderText = "5‑char code"
-KeyBox.Size = UDim2.new(0,200,0,30)
-KeyBox.Position = UDim2.new(0.5,-100,0,40)
-KeyBox.ClearTextOnFocus = false
-KeyBox.Text = ""
-
-local Submit = Instance.new("TextButton", KeyFrame)
-Submit.Size = UDim2.new(0,100,0,30)
-Submit.Position = UDim2.new(0.5,-50,0,80)
-Submit.Text = "Submit"
-
-local function verifyKey(key)
-    if #key~=5 or not key:match("^%w+$") then return false end
-    local url = "https://work.ink/yourLinkHere?key="..key
-    local ok, res = pcall(function()
-        return HttpService:GetAsync(url)
-    end)
-    return ok and res=="valid"
+-- Check if saved key exists and is still valid
+local function loadSavedKey()
+    if isfile(keyFile) and isfile(keyExpireFile) then
+        local savedKey = readfile(keyFile)
+        local expireTime = tonumber(readfile(keyExpireFile))
+        if os.time() < expireTime then
+            return savedKey
+        else
+            delfile(keyFile)
+            delfile(keyExpireFile)
+        end
+    end
+    return nil
 end
 
-Submit.MouseButton1Click:Connect(function()
-    local k = KeyBox.Text
-    if verifyKey(k) then
-        KeyFrame:Destroy()
-        notify("Key Accepted","GUI unlocked.")
-        initGUI()
+-- Validate key remotely
+local function validateKey(key)
+    local result = HttpService:GetAsync(validateURL .. key)
+    local response = HttpService:JSONDecode(result)
+    return response.valid == true
+end
+
+-- Request new key
+local function requestNewKey()
+    local result = HttpService:GetAsync(getKeyURL)
+    local data = HttpService:JSONDecode(result)
+
+    local key = data.key
+    local message = data.message or "Key received."
+
+    -- Save key and expiration (24h)
+    writefile(keyFile, key)
+    writefile(keyExpireFile, tostring(os.time() + (24 * 60 * 60)))
+
+    notify("Key System", message)
+    return key
+end
+
+-- Main
+local activeKey = loadSavedKey()
+if activeKey and validateKey(activeKey) then
+    notify("Key System", "Existing key is still valid.")
+else
+    activeKey = requestNewKey()
+    if validateKey(activeKey) then
+        notify("Key System", "New key activated successfully.")
     else
-        notify("Invalid Key","Check your code and try again.")
+        notify("Key System", "Invalid key. Please try again.")
+        error("Failed to validate key.")
     end
-end)
+end
 
 -- MAIN GUI FUNCTION
 function initGUI()
