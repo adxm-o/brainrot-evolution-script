@@ -1,55 +1,4 @@
---[[ 
-    Brainrot Evolution Universal GUI | v1.0
-    Features: Key System (5‑char alnum via work.ink), Draggable GUI,
-    Speed Changer, Auto Clicker, Auto Evolve, Auto Rebirth,
-    Stat Viewer, Auto Chest Collector, Teleports, Fly Toggle,
-    Anti AFK, Save/Load Config, Panic Button, Notifications
---]]
-
--- SERVICES
-local HttpService       = game:GetService("HttpService")
-local Players           = game:GetService("Players")
-local UserInputService  = game:GetService("UserInputService")
-local RunService        = game:GetService("RunService")
-local StarterGui        = game:GetService("StarterGui")
-
-local localPlayer = Players.LocalPlayer
-
--- EXPLOIT FS (exploit‑only: writefile/readfile)
-local hasFS, writefile, readfile, isfile = pcall(function()
-    return writefile, readfile, isfile
-end)
-if not hasFS then
-    warn("Save Config disabled: fs not available.")
-end
-
--- CONFIG HANDLING
-local CONFIG_FILE = "BrainrotConfig.json"
-local config = {
-    Speed = 16,
-    AutoClick = false,
-    AutoEvolve = false,
-    AutoRebirth = false,
-    AutoChest = false,
-    Fly = false,
-    TeleportTo = nil
-}
--- load if exists
-if hasFS and isfile(CONFIG_FILE) then
-    local ok, dat = pcall(readfile, CONFIG_FILE)
-    if ok then
-        local suc, tbl = pcall(HttpService.JSONDecode, HttpService, dat)
-        if suc and type(tbl)=="table" then
-            for k,v in pairs(tbl) do config[k]=v end
-        end
-    end
-end
-
-local function saveConfig()
-    if not hasFS then return end
-    writefile(CONFIG_FILE, HttpService:JSONEncode(config))
-end
-
+--// Key System Configuration
 local HttpService = game:GetService("HttpService")
 local keyFile = "userkey.txt"
 local keyExpireFile = "keyexpire.txt"
@@ -57,16 +6,18 @@ local keyExpireFile = "keyexpire.txt"
 local getKeyURL = "https://adxm-o.adxm-o.workers.dev/getkey.php"
 local validateURL = "https://adxm-o.adxm-o.workers.dev/validate.php?key="
 
--- Notification function (basic)
+--// Notification function
 local function notify(title, text)
-    game.StarterGui:SetCore("SendNotification", {
-        Title = title,
-        Text = text,
-        Duration = 5
-    })
+    pcall(function()
+        game.StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 5
+        })
+    end)
 end
 
--- Check if saved key exists and is still valid
+--// Load existing key if not expired
 local function loadSavedKey()
     if isfile(keyFile) and isfile(keyExpireFile) then
         local savedKey = readfile(keyFile)
@@ -81,42 +32,59 @@ local function loadSavedKey()
     return nil
 end
 
--- Validate key remotely
+--// Validate key remotely
 local function validateKey(key)
-    local result = HttpService:GetAsync(validateURL .. key)
-    local response = HttpService:JSONDecode(result)
-    return response.valid == true
+    local success, result = pcall(function()
+        return HttpService:GetAsync(validateURL .. key)
+    end)
+
+    if success then
+        local response = HttpService:JSONDecode(result)
+        return response.valid == true
+    else
+        notify("Key Error", "Failed to reach validation server.")
+        return false
+    end
 end
 
--- Request new key
+--// Request new key from server
 local function requestNewKey()
-    local result = HttpService:GetAsync(getKeyURL)
+    local success, result = pcall(function()
+        return HttpService:GetAsync(getKeyURL)
+    end)
+
+    if not success then
+        notify("Key Error", "Failed to get key from server.")
+        error("Key server unreachable.")
+    end
+
     local data = HttpService:JSONDecode(result)
-
     local key = data.key
-    local message = data.message or "Key received."
+    local message = data.message or "Key acquired."
 
-    -- Save key and expiration (24h)
+    -- Save key + 24hr expiration
     writefile(keyFile, key)
-    writefile(keyExpireFile, tostring(os.time() + (24 * 60 * 60)))
+    writefile(keyExpireFile, tostring(os.time() + 86400))
 
     notify("Key System", message)
     return key
 end
 
--- Main
+--// Main Key Flow
 local activeKey = loadSavedKey()
 if activeKey and validateKey(activeKey) then
-    notify("Key System", "Existing key is still valid.")
+    notify("Key System", "Existing key is valid.")
 else
     activeKey = requestNewKey()
     if validateKey(activeKey) then
-        notify("Key System", "New key activated successfully.")
+        notify("Key System", "New key activated.")
     else
-        notify("Key System", "Invalid key. Please try again.")
-        error("Failed to validate key.")
+        notify("Key Error", "Key invalid or blocked.")
+        error("Unauthorized user.")
     end
 end
+
+print("[✔] Key system passed — loading Brainrot Evolution script...")
 
 -- MAIN GUI FUNCTION
 function initGUI()
